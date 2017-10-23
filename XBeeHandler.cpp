@@ -1,5 +1,5 @@
 #include "XBeeHandler.h"
-#include "global.h"
+#include "colors.h"
 
 #include <cstring>
 #include <termios.h>
@@ -13,29 +13,34 @@ XBeeHandler::XBeeHandler(uint32_t set_global_retries) : global_retries(set_globa
 
 
 XBeeHandler::~XBeeHandler() {
+  // Close serial file descriptor
   close(serial_fd);
 }
 
 
 bool XBeeHandler::init(std::string tty_str) {
+  // Open serial file descriptor
   serial_fd = open(tty_str.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
 
+  // Check if file descriptor is valid
   if (serial_fd < 0) {
     std::cout << RED << "Error " << errno << " opening" << tty_str.c_str() << ": " << strerror(errno) << END << std::endl;
     return false;
   }
 
+  // Get serial attributes
   struct termios tty{};
-
   memset(&tty, 0, sizeof tty);
   if (tcgetattr(serial_fd, &tty) != 0) {
     std::cout << RED << "Error " << errno << " from tcgetattr" << END << std::endl;
     return false;
   }
 
+  // Set output and input speed
   cfsetospeed(&tty, B9600);
   cfsetispeed(&tty, B9600);
 
+  // Set Serial flags
   tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
 
   // Disable IGNBRK for mismatched speed tests; otherwise receive break as \000 chars
@@ -57,16 +62,12 @@ bool XBeeHandler::init(std::string tty_str) {
   tty.c_cflag &= ~CSTOPB;
   tty.c_cflag &= ~CRTSCTS;
 
-  if (tcsetattr(serial_fd, TCSANOW, &tty) != 0) {
-    std::cout << RED << "Error " << errno << " from tcsetattr" << END << std::endl;
-    return false;
-  }
-
   tty.c_cc[VMIN] = 0;
   tty.c_cc[VTIME] = 5;                             // 0.5 seconds read timeout
 
+  // Check if setting of attributes was successful
   if (tcsetattr(serial_fd, TCSANOW, &tty) != 0) {
-    std::cout << RED << "Error " << errno << " setting term attributes" << END << std::endl;
+    std::cout << RED << "Error " << errno << " setting attributes" << END << std::endl;
     return false;
   }
 
@@ -74,16 +75,20 @@ bool XBeeHandler::init(std::string tty_str) {
 }
 
 
+// Exchange parser thread
 void XBeeHandler::exchange_thread(const uint8_t *address, const std::string &cmd, const std::vector<uint8_t> &cmd_params,
                                   const std::function<void(XBeeHandler::xbee_frame)> &callback) {
 
   std::cout << "Starting thread" << std::endl;
 
+  // Lock mutex to make exchange thread-safe
   std::lock_guard<std::mutex> guard(recieve_mutex);
 
+  // Wait for serial line to be ready
   sleep(1);
-  std::vector<uint8_t> tx_frame(TX_FRAME_SIZE - 1);
 
+  // Create transmit data frame
+  std::vector<uint8_t> tx_frame(TX_FRAME_SIZE - 1);
   tx_frame[START_DELIM] = 0x7E;
   tx_frame[TYPE]        = 0x17;
   tx_frame[ID]          = 0x01;
@@ -100,22 +105,30 @@ void XBeeHandler::exchange_thread(const uint8_t *address, const std::string &cmd
   tx_frame[CMD_OPT]     = 0x02;
   tx_frame[AT_CMD + 0]  = (uint8_t) cmd.at(0);
   tx_frame[AT_CMD + 1]  = (uint8_t) cmd.at(1);
+
+  // Insert optional command parameters
   tx_frame.insert(std::end(tx_frame), std::begin(cmd_params), std::end(cmd_params));
+
+  // Save length of data frame
   tx_frame[LENGTH] = (uint8_t) ((tx_frame.size() - 3) >> 8);
   tx_frame[LENGTH + 1] = (uint8_t) (tx_frame.size() - 3);
 
+  // Calculate checksum
   int sum = 0;
   for (int i = 3; i < tx_frame.size(); i++) {
     sum = sum + tx_frame[i];
   }
 
+  // Save checksum
   tx_frame.push_back(static_cast<uint8_t>(0xff - static_cast<uint8_t>(sum)));
 
+  // Check if serial file descriptor is valid
   if (serial_fd == -1) {
     std::cout << RED << "File descriptor invalid " << END << std::endl;
     exit(EXIT_FAILURE);
   }
 
+  // Print the transmit data
   std::cout << "\n" << CYAN_DARK << "Transmitting" << END << std::endl;
   for (auto &a : tx_frame) {
     printf("%02x ", a);
@@ -123,6 +136,7 @@ void XBeeHandler::exchange_thread(const uint8_t *address, const std::string &cmd
 
   uint32_t retries = global_retries;
 
+  // Calculate retries
   auto redundancy = [&] (const uint32_t &retries_intl) {
     sleep(3);
     std::cout << RED <<"Retrying.. \nRetry #" << global_retries - retries + 1 << END << "\n" << std::endl;
@@ -130,38 +144,45 @@ void XBeeHandler::exchange_thread(const uint8_t *address, const std::string &cmd
   };
 
   do{
+    // Send data and wait for line
     write(serial_fd, tx_frame.data(), tx_frame.size());
     sleep(1);
 
+    // Flush serial output line
     tcflush(serial_fd, TCOFLUSH);
 
+    // Set retries
     retries = receive(callback) ? 0 : redundancy(retries);
   }while (retries > 0);
 
+  // Unlock mutex
   recieve_mutex.unlock();
 }
 
 
 bool XBeeHandler::send(const uint8_t address[], const std::string &cmd, const std::vector<uint8_t> &cmd_params, const std::function<void(XBeeHandler::xbee_frame)> &callback) {
-
+  // Start exchange thread and detach
   std::thread exchange_thread(&XBeeHandler::exchange_thread, this, address, cmd, cmd_params, callback);
   exchange_thread.detach();
 
   return true;
 }
 
-
+// Receive parser
 bool XBeeHandler::receive(const std::function<void(XBeeHandler::xbee_frame)> &callback) {
   char buf[128] = {0};
   xbee_frame data_frame{0};
 
+  // Read from serial file descriptor
   ssize_t n = read(serial_fd, buf, sizeof buf);
 
+  // Check if serial file descriptor is valid
   if (n == -1) {
     std::cout << RED << "Read ERROR" << END << std::endl;
     return false;
   }
 
+  // Validate status byte
   data_frame.status = static_cast<uint8_t>(buf[17]);
   printf("Status: %02x\n", data_frame.status);
   if (data_frame.status == 0x01) {
@@ -173,7 +194,7 @@ bool XBeeHandler::receive(const std::function<void(XBeeHandler::xbee_frame)> &ca
     std::cout << "Status: " << YELLOW << "UNKNOWN" << END << std::endl;
   }
 
-  // Checksum
+  // Validate checksum
   int sum = 0;
   for (int i = 3; i < sizeof(buf); i++) {
     sum = sum + buf[i];
@@ -185,26 +206,26 @@ bool XBeeHandler::receive(const std::function<void(XBeeHandler::xbee_frame)> &ca
     std::cout << "Checksum: " << GREEN << "OK" << END << std::endl;
   }
 
-  // Length
+  // Get length
   data_frame.length = static_cast<uint16_t>(buf[2] | (buf[1] << 8));
 
-  // Address
+  // Get address
   uint8_t address_64[8];
   int size = sizeof(address_64);
   for (auto &b : address_64) {
     b = static_cast<uint8_t>(buf[4 + size--]);
   } data_frame.address = *reinterpret_cast<uint64_t*>(address_64);
 
-  // Command
+  // Get command
   data_frame.command[0] = static_cast<uint8_t>(buf[15]);
   data_frame.command[1] = static_cast<uint8_t>(buf[16]);
 
-  // Info
+  // Print info to user
   printf("Length: %02x\n", data_frame.length);
   printf("Address: %02llx\n", static_cast<unsigned long long int>(data_frame.address));
   printf("Command: %s\n", data_frame.command.c_str());
 
-  // Data
+  // Get data and print to user
   uint8_t data[data_frame.length - 15];
   size = 0;
   std::cout << "Data: ";
@@ -216,7 +237,7 @@ bool XBeeHandler::receive(const std::function<void(XBeeHandler::xbee_frame)> &ca
     std::cout << RED << "Empty" << END;
   }
 
-  // Received
+  // Print received data
   size = 0;
   std::cout << CYAN_DARK << "\n\nReceived" << END << std::endl;
   for (auto &b : buf) {
@@ -228,8 +249,10 @@ bool XBeeHandler::receive(const std::function<void(XBeeHandler::xbee_frame)> &ca
   }
   std::cout << std::endl;
 
+  // Flush serial input line
   tcflush(serial_fd, TCIFLUSH);
 
+  // Call callback functions
   callback(data_frame);
 
   return true;

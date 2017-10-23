@@ -109,7 +109,7 @@ clean_target:
 # MAKE HELP
 .PHONY: help
 help:
-	@echo "                      STRUERS AM57X MAKE\n"
+	@echo "                      \n"
 	@echo "[TARGET]         [DEFAULT ARGS]"
 	@echo "make                                       - Build for AM57x target with all warnings off"
 	@echo "                 DBG=-w                    - Compiler warning flags (-Wall for all)"

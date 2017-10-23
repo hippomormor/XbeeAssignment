@@ -4,12 +4,12 @@ project(pii)
 set(CMAKE_CXX_STANDARD 11)
 
 include_directories(
-        /home/hippomormor/pi/usr/local/include/)
+        ~/pi/usr/local/include/)
 
 set(SOURCE_FILES
         main.cpp
         XBeeHandler.cpp
         XBeeHandler.h
-        global.h)
+        colors.h)
 
 add_executable(pii ${SOURCE_FILES})

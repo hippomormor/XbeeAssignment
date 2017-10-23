@@ -1,8 +1,9 @@
 # IntelliJ project files
 .idea
 *.iml
+cmake-build-debug/
 out
-gen### C++ template
+
 # Prerequisites
 *.d
 
@@ -35,8 +36,6 @@ gen### C++ template
 *.exe
 *.out
 *.app
-### C template
-# Prerequisites
 
 # Object files
 *.ko
@@ -73,5 +72,3 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
-.idea/
-cmake-build-debug/
