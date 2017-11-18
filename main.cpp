@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <iostream>
 #include <cmath>       /* log */
+#include <socket.h>
 
 
 using namespace std;
@@ -14,6 +15,9 @@ using namespace std;
 
 std::vector<uint8_t> NO_PARAMS;
 const double V_REF = 1.90;
+
+
+Socket ipcSocket = Socket();
 
 
 enum io_pin_options_e {
@@ -167,6 +171,13 @@ void frame_constructer(XBeeHandler *xbee_handler) {
 
 // m..m..Main 
 int main(int argc, char *argv[]) {
+  
+  
+  ipcSocket.InitTx("localhost", 3828);
+  
+  string first = "hello Java from C IPC test";
+  
+  ipcSocket.Tx((void*) first.c_str(), first.length() );
   
   char human_cmd = 0;
   XBeeHandler xbee_handler(20);

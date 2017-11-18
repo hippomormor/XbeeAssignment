@@ -1,0 +1,1 @@
+extern int Fileio_OpenFile(char *pFileName);
